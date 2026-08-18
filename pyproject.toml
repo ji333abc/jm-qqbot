@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "jm-qqbot"
 version = "0.1.0"
-description = "开箱即用的 QQ 群 JM 下载机器人"
+description = "使用 Docker 部署的 QQ 群 JM 下载、PDF 加密打包与文件上传机器人"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }

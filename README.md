@@ -1,57 +1,145 @@
 # JM QQ Bot
 
-一个独立、开箱即用的 QQ 官方群机器人。群成员 `@机器人 JM 作品ID` 后，机器人会下载内容、优先合成为 PDF、使用随机密码打包为 AES ZIP，再通过 QQ 群文件接口上传。
+使用 Docker 部署的 QQ 群 JM 下载机器人。
 
-本项目从 OOPZ Music Bot 的 JM/QQBOT 模块中独立出来，不依赖 OOPZ、QQ 音乐服务或内部桥接 API。
+群成员发送 `@机器人 JM 作品ID` 后，机器人会下载作品图片、生成 PDF、创建带随机密码的 AES 加密 ZIP，并将文件上传到当前 QQ 群。
 
 ## 功能
 
-- 单个或批量任务：`JM 111111 222222`，自动去重并顺序执行
-- 下载前查询页数并估算耗时
-- PDF 质量降级；仍超限时自动回退到原始图片 ZIP
+- 支持单个作品和批量作品下载
+- 自动查询页数并估算处理时间
+- 按章节和页码排序图片
+- 将图片转换为 PDF 后打包上传
+- PDF 超过大小限制时降低图片质量
+- PDF 仍然超限或转换失败时改为打包原始图片
 - 每个任务生成独立的 14 位随机解压密码
-- 群和用户双白名单、消息去重、单任务锁
-- 下载/上传超时、上传重试、失败文件延迟清理
-- Docker Compose 一条命令启动
-- 容器健康检查和崩溃自动重启
+- 支持群白名单和用户白名单
+- 同一时间只执行一个下载任务，避免资源耗尽
+- 自动处理重复消息、下载超时和上传超时
+- QQ 文件上传失败时自动分类并重试网络错误
+- 成功上传后自动删除任务文件
+- 上传失败的文件延迟清理，便于排查问题
+- Docker 健康检查和容器自动重启
 
-## 最快启动：Docker Compose
+## 运行要求
 
-前置条件：一个已开通群消息事件和群文件能力的 QQ 官方机器人，以及安装了 Docker Compose 的 Linux 服务器、NAS 或其他常驻设备。
+- QQ 官方机器人 App ID 和 App Secret
+- 已为机器人开通群消息事件和群文件能力
+- Docker Engine
+- Docker Compose v2
+- 建议至少 1 GB 可用内存和足够的临时磁盘空间
+
+## Docker 部署
 
 ```bash
 git clone https://github.com/ji333abc/jm-qqbot.git
 cd jm-qqbot
 cp .env.example .env
-# 编辑 .env，至少填写 QQBOT_APP_ID 和 QQBOT_APP_SECRET
+```
+
+编辑 `.env`，至少填写：
+
+```dotenv
+QQBOT_APP_ID=你的AppID
+QQBOT_APP_SECRET=你的AppSecret
+```
+
+启动机器人：
+
+```bash
 docker compose up -d --build
+```
+
+查看日志：
+
+```bash
 docker compose logs -f bot
 ```
 
-更新到新版本：
+查看容器状态：
+
+```bash
+docker compose ps
+```
+
+停止机器人：
+
+```bash
+docker compose down
+```
+
+更新版本：
 
 ```bash
 git pull
 docker compose up -d --build
 ```
 
-建议同时填写：
+## 使用命令
 
-- `QQBOT_ALLOWED_GROUP_OPENIDS`：允许使用机器人的群 OpenID，逗号分隔。
-- `QQBOT_JM_ALLOWED_USER_OPENIDS`：允许下载的成员 OpenID，逗号分隔。
-
-两项留空都表示不限制，不建议公开机器人时这样配置。
-
-机器人上线后，在目标群发送：
+下载一个作品：
 
 ```text
 @机器人 JM 123456
-@机器人 JM 123456 234567
 ```
 
-任务数据挂载在 `./data`，成功上传后立即删除；上传失败的成品默认保留 30 分钟后删除，便于排障。
+批量下载：
 
-## 本地运行
+```text
+@机器人 JM 123456 234567 345678
+```
+
+查看用法：
+
+```text
+@机器人 JM
+```
+
+同一条命令中的重复 ID 会自动去重。批量任务按照输入顺序逐个下载和上传。
+
+## 权限配置
+
+建议使用群白名单和用户白名单限制下载权限：
+
+```dotenv
+QQBOT_ALLOWED_GROUP_OPENIDS=群OpenID1,群OpenID2
+QQBOT_JM_ALLOWED_USER_OPENIDS=用户OpenID1,用户OpenID2
+```
+
+- 群白名单为空：机器人所在的所有群都可以提交命令。
+- 用户白名单为空：群内所有成员都可以提交下载任务。
+- 两项同时配置：只有指定群中的指定成员可以提交任务。
+
+## 完整配置
+
+| 变量 | 默认值 | 说明 |
+|---|---:|---|
+| `QQBOT_APP_ID` | 无 | QQ 机器人 App ID，必填 |
+| `QQBOT_APP_SECRET` | 无 | QQ 机器人 App Secret，必填 |
+| `QQBOT_ALLOWED_GROUP_OPENIDS` | 空 | 允许使用机器人的群 OpenID，逗号分隔 |
+| `QQBOT_JM_ALLOWED_USER_OPENIDS` | 空 | 允许下载的用户 OpenID，逗号分隔 |
+| `QQBOT_JM_BATCH_MAX_ITEMS` | `3` | 单条命令最多包含的作品数 |
+| `QQBOT_JM_MAX_BYTES` | `83886080` | ZIP 最大字节数，不能超过 100 MiB |
+| `QQBOT_JM_TIMEOUT_SECONDS` | `1200` | 单个作品下载和打包超时秒数 |
+| `QQBOT_JM_UPLOAD_TIMEOUT_SECONDS` | `900` | QQ 文件上传超时秒数 |
+| `QQBOT_JM_INSPECT_TIMEOUT_SECONDS` | `30` | 作品页数查询超时秒数 |
+| `QQBOT_JM_FAILURE_RETAIN_SECONDS` | `1800` | 上传失败任务的保留秒数 |
+| `QQBOT_JM_TEMP_ROOT` | `/app/data/jm-tasks` | 任务临时目录 |
+| `QQBOT_JM_TIMING_PATH` | `/app/data/jm-timing.json` | 耗时样本文件 |
+| `LOG_LEVEL` | `INFO` | 日志级别 |
+
+## 文件与数据
+
+Docker Compose 将宿主机的 `./data` 挂载到容器的 `/app/data`。
+
+- 下载图片、PDF 和 ZIP 保存在 `data/jm-tasks`。
+- 上传成功后，当前任务目录立即删除。
+- 上传失败且已经生成 ZIP 时，任务目录按配置延迟删除。
+- `data/jm-timing.json` 保存最近的任务耗时样本，用于估算后续任务时长。
+- App Secret 只从 `.env` 读取，不会写入任务文件。
+- ZIP 解压密码只发送到发起任务的 QQ 群消息中。
+
+## 本地开发
 
 需要 Python 3.11+ 和 Node.js 18+：
 
@@ -64,36 +152,25 @@ cp .env.example .env
 jm-qqbot
 ```
 
-Windows PowerShell 激活命令为 `.\.venv\Scripts\Activate.ps1`。
+Windows PowerShell 使用：
 
-## 配置
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
 
-| 变量 | 默认值 | 说明 |
-|---|---:|---|
-| `QQBOT_APP_ID` | 无 | QQ 机器人 App ID，必填 |
-| `QQBOT_APP_SECRET` | 无 | QQ 机器人 Secret，必填 |
-| `QQBOT_ALLOWED_GROUP_OPENIDS` | 空 | 群白名单，空表示不限 |
-| `QQBOT_JM_ALLOWED_USER_OPENIDS` | 空 | 用户白名单，空表示不限 |
-| `QQBOT_JM_BATCH_MAX_ITEMS` | `3` | 单条命令最多作品数 |
-| `QQBOT_JM_MAX_BYTES` | `83886080` | 成品最大字节数，不能超过 100 MiB |
-| `QQBOT_JM_TIMEOUT_SECONDS` | `1200` | 单个下载/打包超时 |
-| `QQBOT_JM_UPLOAD_TIMEOUT_SECONDS` | `900` | 文件上传超时 |
-| `QQBOT_JM_FAILURE_RETAIN_SECONDS` | `1800` | 上传失败成品保留时间 |
-| `LOG_LEVEL` | `INFO` | 日志级别 |
-
-## 开发与测试
+运行测试：
 
 ```bash
 python -m unittest discover -s tests -v
 npm test --prefix uploader
-ruff check jm_qqbot tests
 ```
 
-## 安全与合规
+## 安全
 
-- 不要提交 `.env`、App Secret、任务压缩包或日志。
-- 公网机器人务必配置群/用户白名单，并留意带宽、磁盘和 QQ 上传额度。
-- 仅下载、处理和分享你有权访问及传播的内容；使用者需自行遵守内容来源、QQ 平台及所在地法律的规则。
+- 不要提交 `.env`、App Secret、任务文件或运行日志。
+- 对外开放机器人时应配置群白名单和用户白名单。
+- 根据服务器磁盘、内存和网络带宽设置任务数量与文件大小限制。
+- 只下载和分享你有权访问及传播的内容。
 
 ## License
 
