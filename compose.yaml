@@ -6,3 +6,4 @@ services:
     volumes:
       - ./data:/app/data
     init: true
+    stop_grace_period: 30s

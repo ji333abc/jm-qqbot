@@ -13,17 +13,26 @@
 - 群和用户双白名单、消息去重、单任务锁
 - 下载/上传超时、上传重试、失败文件延迟清理
 - Docker Compose 一条命令启动
-- 可选 Cloudflare Containers 部署
+- 容器健康检查和崩溃自动重启
 
 ## 最快启动：Docker Compose
 
-前置条件：一个已开通群消息事件和群文件能力的 QQ 官方机器人，以及 Docker Compose。
+前置条件：一个已开通群消息事件和群文件能力的 QQ 官方机器人，以及安装了 Docker Compose 的 Linux 服务器、NAS 或其他常驻设备。
 
 ```bash
+git clone https://github.com/ji333abc/jm-qqbot.git
+cd jm-qqbot
 cp .env.example .env
 # 编辑 .env，至少填写 QQBOT_APP_ID 和 QQBOT_APP_SECRET
 docker compose up -d --build
 docker compose logs -f bot
+```
+
+更新到新版本：
+
+```bash
+git pull
+docker compose up -d --build
 ```
 
 建议同时填写：
@@ -56,36 +65,6 @@ jm-qqbot
 ```
 
 Windows PowerShell 激活命令为 `.\.venv\Scripts\Activate.ps1`。
-
-## Cloudflare：能否不买服务器？
-
-可以，但应使用 **Cloudflare Containers**，不是只用普通 Workers/Pages。
-
-普通 Worker 没有适合本项目的本地运行时和临时磁盘，128 MB 内存也很难完成 Pillow/PDF/ZIP 处理；Free 计划每次请求仅 10 ms CPU。Containers 能直接运行本项目的 Python + Node Docker 镜像，带临时磁盘并允许出站网络，因此技术上可行。它属于 Workers Paid，仍按容器资源和网络出口计费，只是无需自行维护 VPS。
-
-本项目的 QQ SDK 使用持续网关连接，而 Container 会在无入站活动后休眠。`cloudflare/wrangler.jsonc` 配置了每 5 分钟的 Cron 健康检查，并将休眠窗口设为 10 分钟，以维持一个单例容器；平台重启或部署期间，SDK 会重新连接。容器磁盘是临时的，所以不要把它当永久文件存储。
-
-### 部署到 Cloudflare Containers
-
-要求：Workers Paid 计划、本机 Docker、Node.js。首次部署：
-
-```bash
-cd cloudflare
-npm install
-npx wrangler login
-npx wrangler secret put QQBOT_APP_ID
-npx wrangler secret put QQBOT_APP_SECRET
-npm run deploy
-```
-
-部署完成后访问 Worker 的 `/healthz`，会启动单例容器；Cron 随后负责保活。白名单和限制可在 `cloudflare/wrangler.jsonc` 的 `vars` 中修改后重新部署。
-
-注意：
-
-- 配置使用 `basic` 实例（1 GiB 内存、4 GB 临时磁盘）；大作品仍可能超出资源限制。
-- Containers 不是免费服务，也不是永久免费进程。费用和平台限制可能变化，部署前查看 Cloudflare 最新定价。
-- QQ 平台可能限制主动消息、文件大小、每日上传量和过期消息关联；实际权限以机器人后台为准。
-- 如果追求最低成本和最稳定的常驻网关连接，小型 VPS/家用 NAS 仍通常更合适。
 
 ## 配置
 
