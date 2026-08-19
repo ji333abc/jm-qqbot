@@ -13,20 +13,25 @@ import shutil
 import subprocess
 import sys
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import Lock, Thread
+from threading import BoundedSemaphore, Lock, Thread
 
 import botpy
 from botpy.message import GroupMessage
 
 logger = logging.getLogger("JMQQBot")
-_seen_messages: dict[str, float] = {}
+_seen_messages: OrderedDict[str, float] = OrderedDict()
+_rate_limits: OrderedDict[str, tuple[float, int]] = OrderedDict()
 _seen_lock = Lock()
+_rate_limit_lock = Lock()
 _job_lock = Lock()
 _progress_lock = Lock()
 _tasks: set[asyncio.Task] = set()
+_CACHE_MAX_ENTRIES = 4096
+_MAX_COMMAND_CHARS = 200
 _PROGRESS_COMMANDS = {"jm进度", "jm状态", "查询当前下载进度", "查询下载进度", "下载进度"}
 _IMAGE_SUFFIXES = {".webp", ".jpg", ".jpeg", ".png", ".bmp"}
 
@@ -57,7 +62,11 @@ class Settings:
     allowed_groups: set[str] = field(default_factory=lambda: _csv_set("QQBOT_ALLOWED_GROUP_OPENIDS"))
     allowed_users: set[str] = field(default_factory=lambda: _csv_set("QQBOT_JM_ALLOWED_USER_OPENIDS"))
     batch_max_items: int = field(default_factory=lambda: max(1, int(os.getenv("QQBOT_JM_BATCH_MAX_ITEMS", "3"))))
+    max_pages: int = field(default_factory=lambda: int(os.getenv("QQBOT_JM_MAX_PAGES", "2000")))
     max_bytes: int = field(default_factory=lambda: int(os.getenv("QQBOT_JM_MAX_BYTES", str(80 * 1024 * 1024))))
+    user_rate_limit: int = field(default_factory=lambda: int(os.getenv("QQBOT_JM_USER_RATE_LIMIT", "6")))
+    group_rate_limit: int = field(default_factory=lambda: int(os.getenv("QQBOT_JM_GROUP_RATE_LIMIT", "30")))
+    rate_limit_window: int = field(default_factory=lambda: int(os.getenv("QQBOT_JM_RATE_LIMIT_WINDOW_SECONDS", "60")))
     download_timeout: int = field(default_factory=lambda: int(os.getenv("QQBOT_JM_TIMEOUT_SECONDS", "1200")))
     upload_timeout: int = field(default_factory=lambda: int(os.getenv("QQBOT_JM_UPLOAD_TIMEOUT_SECONDS", "900")))
     inspect_timeout: int = field(default_factory=lambda: int(os.getenv("QQBOT_JM_INSPECT_TIMEOUT_SECONDS", "30")))
@@ -84,6 +93,12 @@ class Settings:
             raise SystemExit("缺少环境变量: " + ", ".join(missing))
         if self.max_bytes <= 0 or self.max_bytes > 100 * 1024 * 1024:
             raise SystemExit("QQBOT_JM_MAX_BYTES 必须在 1 到 104857600 之间")
+        if self.max_pages <= 0:
+            raise SystemExit("QQBOT_JM_MAX_PAGES 必须大于 0")
+        if self.user_rate_limit <= 0 or self.group_rate_limit <= 0:
+            raise SystemExit("命令速率限制必须大于 0")
+        if self.rate_limit_window <= 0:
+            raise SystemExit("QQBOT_JM_RATE_LIMIT_WINDOW_SECONDS 必须大于 0")
         if not self.uploader.is_file():
             raise SystemExit(f"QQ 上传器不存在: {self.uploader}")
         if not Path(self.node).is_file() and shutil.which(self.node) is None:
@@ -166,14 +181,35 @@ def _clear_active_progress(progress: JobProgress) -> None:
 
 
 def _is_duplicate(message_id: str) -> bool:
+    if not message_id:
+        return False
     now = time.monotonic()
     with _seen_lock:
-        for key in [key for key, value in _seen_messages.items() if now - value > 600]:
-            _seen_messages.pop(key, None)
+        while _seen_messages:
+            key, timestamp = next(iter(_seen_messages.items()))
+            if now - timestamp <= 600:
+                break
+            _seen_messages.pop(key)
         if message_id in _seen_messages:
             return True
         _seen_messages[message_id] = now
+        while len(_seen_messages) > _CACHE_MAX_ENTRIES:
+            _seen_messages.popitem(last=False)
         return False
+
+
+def _is_rate_limited(subject: str, limit: int, window: int) -> bool:
+    now = time.monotonic()
+    with _rate_limit_lock:
+        started, count = _rate_limits.get(subject, (now, 0))
+        if now - started >= window:
+            started, count = now, 0
+        count += 1
+        _rate_limits[subject] = (started, count)
+        _rate_limits.move_to_end(subject)
+        while len(_rate_limits) > _CACHE_MAX_ENTRIES:
+            _rate_limits.popitem(last=False)
+        return count > limit
 
 
 def _inspect_album(settings: Settings, album_id: str) -> int:
@@ -566,13 +602,30 @@ class JMClient(botpy.Client):
             return
         try:
             jobs: list[tuple[str, int | None]] = []
+            inspection_errors: list[str] = []
             for album_id in album_ids:
                 try:
                     page_count = await asyncio.to_thread(_inspect_album, settings, album_id)
                 except Exception as exc:
                     logger.warning("页数查询失败: album_id=%s error=%s", album_id, exc)
-                    page_count = None
+                    inspection_errors.append(album_id)
+                    continue
                 jobs.append((album_id, page_count))
+            if inspection_errors:
+                details = "、".join(f"JM{album_id}" for album_id in inspection_errors)
+                await self.reply(message, f"无法确认作品页数，已拒绝任务：{details}")
+                _job_lock.release()
+                return
+            oversized = [
+                (album_id, page_count)
+                for album_id, page_count in jobs
+                if page_count is not None and page_count > settings.max_pages
+            ]
+            if oversized:
+                details = "、".join(f"JM{album_id}（{page_count} 页）" for album_id, page_count in oversized)
+                await self.reply(message, f"任务页数超过 {settings.max_pages} 页上限：{details}")
+                _job_lock.release()
+                return
             if len(jobs) == 1:
                 album_id, page_count = jobs[0]
                 estimate = f"\n页数：{page_count} 页\n预计约 {_estimate_seconds(settings, page_count)} 秒" if page_count else "\n预计时间：暂时无法计算"
@@ -602,7 +655,15 @@ class JMClient(botpy.Client):
         if self.settings.allowed_groups and group_openid not in self.settings.allowed_groups:
             logger.warning("忽略未授权群的命令: %s", group_openid)
             return
-        if not command or _is_duplicate(message_id):
+        if not command or len(command) > _MAX_COMMAND_CHARS or _is_duplicate(message_id):
+            return
+        user_key = f"user:{group_openid}:{requester_id}"
+        group_key = f"group:{group_openid}"
+        if _is_rate_limited(user_key, self.settings.user_rate_limit, self.settings.rate_limit_window):
+            logger.warning("用户命令触发速率限制: group=%s user=%s", group_openid, requester_id)
+            return
+        if _is_rate_limited(group_key, self.settings.group_rate_limit, self.settings.rate_limit_window):
+            logger.warning("群命令触发速率限制: group=%s", group_openid)
             return
         album_ids = parse_album_ids(command)
         if is_progress_command(command):
@@ -634,9 +695,39 @@ class _HealthHandler(BaseHTTPRequestHandler):
         return
 
 
+class _BoundedHealthServer(ThreadingHTTPServer):
+    daemon_threads = True
+    request_queue_size = 8
+
+    def __init__(self, *args, **kwargs) -> None:
+        self._slots = BoundedSemaphore(8)
+        super().__init__(*args, **kwargs)
+
+    def get_request(self):
+        request, address = super().get_request()
+        request.settimeout(3)
+        return request, address
+
+    def process_request(self, request, client_address) -> None:
+        if not self._slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
+
+
 def _start_health_server() -> None:
     port = int(os.getenv("PORT", "8080"))
-    server = ThreadingHTTPServer(("0.0.0.0", port), _HealthHandler)
+    server = _BoundedHealthServer(("0.0.0.0", port), _HealthHandler)
     Thread(target=server.serve_forever, name="health-server", daemon=True).start()
     logger.info("健康检查监听于 0.0.0.0:%s", port)
 

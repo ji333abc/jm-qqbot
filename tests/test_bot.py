@@ -21,6 +21,7 @@ from jm_qqbot.bot import (
     Settings,
     _estimate_seconds,
     _is_expired_reply_error,
+    _is_rate_limited,
     _progress_bar,
     _progress_percent,
     is_progress_command,
@@ -46,6 +47,12 @@ class CommandTests(unittest.TestCase):
         for message in ("msgid已经过期", "回复消息msg_id已过期", "MSG-ID expired"):
             self.assertTrue(_is_expired_reply_error(RuntimeError(message)))
         self.assertFalse(_is_expired_reply_error(RuntimeError("主动消息失败, 无权限")))
+
+    def test_rate_limit_rejects_requests_over_limit(self) -> None:
+        subject = f"test:{id(self)}"
+        self.assertFalse(_is_rate_limited(subject, 2, 60))
+        self.assertFalse(_is_rate_limited(subject, 2, 60))
+        self.assertTrue(_is_rate_limited(subject, 2, 60))
 
 
 class ProgressTests(unittest.TestCase):

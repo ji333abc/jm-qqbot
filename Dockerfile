@@ -16,12 +16,13 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY pyproject.toml README.md LICENSE ./
+COPY pyproject.toml requirements.lock README.md LICENSE ./
 COPY jm_qqbot ./jm_qqbot
 COPY uploader ./uploader
 COPY --from=node-deps /build/uploader/node_modules ./uploader/node_modules
 
-RUN pip install --no-cache-dir . \
+RUN pip install --no-cache-dir --requirement requirements.lock \
+    && pip install --no-cache-dir --no-deps --no-build-isolation . \
     && groupadd --system bot \
     && useradd --system --gid bot --home-dir /app bot \
     && mkdir -p /app/data/jm-tasks \

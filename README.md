@@ -136,7 +136,11 @@ QQBOT_JM_ALLOWED_USER_OPENIDS=用户OpenID1,用户OpenID2
 | `QQBOT_ALLOWED_GROUP_OPENIDS` | 空 | 允许使用机器人的群 OpenID，逗号分隔 |
 | `QQBOT_JM_ALLOWED_USER_OPENIDS` | 空 | 允许下载的用户 OpenID，逗号分隔 |
 | `QQBOT_JM_BATCH_MAX_ITEMS` | `3` | 单条命令最多包含的作品数 |
+| `QQBOT_JM_MAX_PAGES` | `2000` | 单个作品允许处理的最大页数 |
 | `QQBOT_JM_MAX_BYTES` | `83886080` | ZIP 最大字节数，不能超过 100 MiB |
+| `QQBOT_JM_USER_RATE_LIMIT` | `6` | 单个用户在限流窗口内最多处理的命令数 |
+| `QQBOT_JM_GROUP_RATE_LIMIT` | `30` | 单个群在限流窗口内最多处理的命令数 |
+| `QQBOT_JM_RATE_LIMIT_WINDOW_SECONDS` | `60` | 命令限流窗口秒数 |
 | `QQBOT_JM_TIMEOUT_SECONDS` | `1200` | 单个作品下载和打包超时秒数 |
 | `QQBOT_JM_UPLOAD_TIMEOUT_SECONDS` | `900` | QQ 文件上传超时秒数 |
 | `QQBOT_JM_INSPECT_TIMEOUT_SECONDS` | `30` | 作品页数查询超时秒数 |
@@ -163,7 +167,8 @@ Docker Compose 将宿主机的 `./data` 挂载到容器的 `/app/data`。
 ```bash
 python -m venv .venv
 . .venv/bin/activate
-pip install -e .
+pip install -r requirements.lock
+pip install --no-deps --no-build-isolation -e .
 npm ci --prefix uploader
 cp .env.example .env
 jm-qqbot
