@@ -65,6 +65,7 @@ export function classifyError(error) {
   const message = messageOf(error).toLowerCase();
   const status = Number(error?.httpStatus || 0);
   const code = Number(error?.bizCode || 0);
+  if (code === 40034031 || /msg.?id.*(?:过期|expired)/i.test(message)) return "expired";
   if (status === 401 || status === 403 || code === 11255 || /invalid.*(?:token|secret)|unauthori[sz]ed|forbidden|鉴权|认证/.test(message)) return "auth";
   if (/too large|file size|超过.*(?:mib|mb|大小)|entity too large/.test(message)) return "size";
   if (/timeout|timed out|aborterror|超时/.test(message)) return "timeout";
@@ -91,6 +92,17 @@ export async function uploadWithRetry(bot, target, source, options, retryDelayMs
   throw lastError;
 }
 
+export async function sendFileWithFallback(bot, target, source, options, retryDelayMs = RETRY_DELAY_MS) {
+  try {
+    return await uploadWithRetry(bot, target, source, options, retryDelayMs);
+  } catch (error) {
+    if (!target.msgId || classifyError(error) !== "expired") throw error;
+    log("warn", "原消息已过期，改用群主动消息发送文件");
+    const { msgId: _expiredMsgId, ...proactiveTarget } = target;
+    return uploadWithRetry(bot, proactiveTarget, source, options, retryDelayMs);
+  }
+}
+
 async function main() {
   try {
     const args = parseArgs(process.argv.slice(2));
@@ -102,7 +114,7 @@ async function main() {
     const { realPath, size } = validateFile(required(args.file, "--file"));
     log("info", `准备上传 ${displayName} (${(size / 1024 / 1024).toFixed(1)} MiB)`);
     const bot = new QQBot({ appId, appSecret, logger, userAgent: "jm-qqbot-uploader/0.1.0" });
-    const result = await uploadWithRetry(
+    const result = await sendFileWithFallback(
       bot,
       { scope: "group", targetId: groupOpenid, msgId: messageId },
       { localPath: realPath },
