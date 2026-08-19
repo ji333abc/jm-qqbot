@@ -1,12 +1,14 @@
-# JM QQ Bot
+<h1 align="center">JM QQ Bot</h1>
 
-[![Version](https://img.shields.io/github/v/tag/ji333abc/jm-qqbot?label=version)](https://github.com/ji333abc/jm-qqbot/tags)
-[![CI](https://github.com/ji333abc/jm-qqbot/actions/workflows/ci.yml/badge.svg)](https://github.com/ji333abc/jm-qqbot/actions/workflows/ci.yml)
-![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
-![Docker](https://img.shields.io/badge/Docker-supported-2496ED?logo=docker&logoColor=white)
-[![License](https://img.shields.io/github/license/ji333abc/jm-qqbot)](LICENSE)
-[![Stars](https://img.shields.io/github/stars/ji333abc/jm-qqbot?style=flat)](https://github.com/ji333abc/jm-qqbot/stargazers)
-[![Forks](https://img.shields.io/github/forks/ji333abc/jm-qqbot?style=flat)](https://github.com/ji333abc/jm-qqbot/forks)
+<p align="center">
+  <a href="https://github.com/ji333abc/jm-qqbot/tags"><img src="https://img.shields.io/github/v/tag/ji333abc/jm-qqbot?label=version" alt="Version"></a>
+  <a href="https://github.com/ji333abc/jm-qqbot/actions/workflows/ci.yml"><img src="https://github.com/ji333abc/jm-qqbot/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&amp;logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/Docker-supported-2496ED?logo=docker&amp;logoColor=white" alt="Docker">
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/ji333abc/jm-qqbot" alt="License"></a>
+  <a href="https://github.com/ji333abc/jm-qqbot/stargazers"><img src="https://img.shields.io/github/stars/ji333abc/jm-qqbot?style=flat" alt="Stars"></a>
+  <a href="https://github.com/ji333abc/jm-qqbot/forks"><img src="https://img.shields.io/github/forks/ji333abc/jm-qqbot?style=flat" alt="Forks"></a>
+</p>
 
 使用 Docker 部署的 QQ 群 JM 下载机器人。
 
