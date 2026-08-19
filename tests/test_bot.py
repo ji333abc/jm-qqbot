@@ -20,6 +20,7 @@ except ImportError:
 from jm_qqbot.bot import (
     Settings,
     _estimate_seconds,
+    _is_expired_reply_error,
     _progress_bar,
     _progress_percent,
     is_progress_command,
@@ -40,6 +41,11 @@ class CommandTests(unittest.TestCase):
         self.assertTrue(is_progress_command("JM进度"))
         self.assertTrue(is_progress_command("查询 当前 下载 进度"))
         self.assertFalse(is_progress_command("JM 123"))
+
+    def test_expired_message_variants_normalize_to_msgid(self) -> None:
+        for message in ("msgid已经过期", "回复消息msg_id已过期", "MSG-ID expired"):
+            self.assertTrue(_is_expired_reply_error(RuntimeError(message)))
+        self.assertFalse(_is_expired_reply_error(RuntimeError("主动消息失败, 无权限")))
 
 
 class ProgressTests(unittest.TestCase):

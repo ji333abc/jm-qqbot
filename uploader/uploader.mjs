@@ -111,6 +111,7 @@ async function main() {
     const groupOpenid = required(args["group-openid"], "--group-openid");
     const messageId = required(args["msg-id"], "--msg-id");
     const displayName = path.basename(required(args.name, "--name"));
+    const content = String(process.env.QQBOT_JM_UPLOAD_CONTENT || "").trim().slice(0, 1000);
     const { realPath, size } = validateFile(required(args.file, "--file"));
     log("info", `准备上传 ${displayName} (${(size / 1024 / 1024).toFixed(1)} MiB)`);
     const bot = new QQBot({ appId, appSecret, logger, userAgent: "jm-qqbot-uploader/0.1.0" });
@@ -120,6 +121,7 @@ async function main() {
       { localPath: realPath },
       {
         fileName: displayName,
+        ...(content ? { content } : {}),
         onProgress: (uploaded, total) => log("info", `上传进度 ${uploaded}/${total}`),
       },
     );

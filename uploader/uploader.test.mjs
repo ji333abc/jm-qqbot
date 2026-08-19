@@ -18,11 +18,11 @@ test("classifies retryable failures", () => {
 });
 
 test("falls back to a proactive file message when msg_id expired", async () => {
-  const targets = [];
+  const calls = [];
   const bot = {
-    async sendFile(target) {
-      targets.push(target);
-      if (targets.length === 1) {
+    async sendFile(target, source, options) {
+      calls.push({ target, source, options });
+      if (calls.length === 1) {
         throw Object.assign(new Error("msgid已经过期,不能回复"), { bizCode: 40034031 });
       }
       return { upload: { file_uuid: "uploaded" } };
@@ -33,13 +33,17 @@ test("falls back to a proactive file message when msg_id expired", async () => {
     bot,
     { scope: "group", targetId: "group-openid", msgId: "expired-message" },
     { localPath: "/tmp/JM.zip" },
-    { fileName: "JM.zip" },
+    { fileName: "JM.zip", content: "解压密码：test-password" },
     0,
   );
 
   assert.equal(result.upload.file_uuid, "uploaded");
-  assert.deepEqual(targets, [
-    { scope: "group", targetId: "group-openid", msgId: "expired-message" },
-    { scope: "group", targetId: "group-openid" },
+  assert.deepEqual(calls.map((call) => call.target), [
+      { scope: "group", targetId: "group-openid", msgId: "expired-message" },
+      { scope: "group", targetId: "group-openid" },
+    ]);
+  assert.deepEqual(calls.map((call) => call.options.content), [
+    "解压密码：test-password",
+    "解压密码：test-password",
   ]);
 });

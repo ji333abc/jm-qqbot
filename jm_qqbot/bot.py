@@ -105,6 +105,11 @@ def is_progress_command(command: str) -> bool:
     return re.sub(r"\s+", "", str(command or "")).lower() in _PROGRESS_COMMANDS
 
 
+def _is_expired_reply_error(error: Exception) -> bool:
+    normalized = re.sub(r"[\s_-]+", "", str(error)).lower()
+    return "msgid" in normalized and ("过期" in normalized or "expired" in normalized)
+
+
 def _progress_percent(downloaded_pages: int, total_pages: int | None, phase: str) -> int | None:
     if phase == "completed":
         return 100
@@ -270,7 +275,10 @@ async def _upload(
     group_openid: str,
     message_id: str,
     display_name: str,
+    content: str,
 ) -> dict:
+    environment = os.environ.copy()
+    environment["QQBOT_JM_UPLOAD_CONTENT"] = content[:1000]
     process = await asyncio.create_subprocess_exec(
         settings.node,
         str(settings.uploader),
@@ -285,7 +293,7 @@ async def _upload(
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        env=os.environ.copy(),
+        env=environment,
     )
     assert process.stdout is not None and process.stderr is not None
     stdout_task = asyncio.create_task(process.stdout.read())
@@ -337,8 +345,7 @@ class JMClient(botpy.Client):
         try:
             await message._api.post_group_message(**payload)
         except Exception as exc:
-            normalized = str(exc).replace(" ", "").lower()
-            if "msgid" not in normalized or "过期" not in normalized:
+            if not _is_expired_reply_error(exc):
                 raise
             payload.pop("msg_id")
             payload.pop("msg_seq")
@@ -434,7 +441,14 @@ class JMClient(botpy.Client):
                     f"压缩包 {archive_size / 1024 / 1024:.1f} MiB，超过 {settings.max_bytes / 1024 / 1024:.0f} MiB 上限"
                 )
             upload_started = time.monotonic()
-            await _upload(settings, archive, str(message.group_openid), str(message.id), archive.name)
+            await _upload(
+                settings,
+                archive,
+                str(message.group_openid),
+                str(message.id),
+                archive.name,
+                f"JM{album_id}.zip\n解压密码：{password}",
+            )
             progress.phase = "completed"
             upload_seconds = time.monotonic() - upload_started
             total_seconds = time.monotonic() - started
@@ -470,7 +484,10 @@ class JMClient(botpy.Client):
                 ]
                 if warning:
                     lines.append(warning)
-                await self.reply(message, "\n".join(lines), msg_seq=3)
+                try:
+                    await self.reply(message, "\n".join(lines), msg_seq=3)
+                except Exception:
+                    logger.exception("文件已发送，但完成通知发送失败: album_id=%s", album_id)
             return {
                 "ok": True,
                 "album_id": album_id,
