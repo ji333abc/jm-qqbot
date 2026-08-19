@@ -37,7 +37,7 @@ cd jm-qqbot
 cp .env.example .env
 ```
 
-进入 QQ 开放平台的机器人管理页面，在“开发设置”中复制 AppID 和 AppSecret：
+进入 [QQ 开放平台](https://q.qq.com/)的机器人管理页面，在“开发设置”中复制 AppID 和 AppSecret：
 
 ![在 QQ 开放平台复制 AppID 和 AppSecret](docs/images/qqbot-app-credentials.png)
 
