@@ -221,6 +221,16 @@ def download(album_id: str, job_dir: Path, password: str) -> None:
     failed_photos = len(downloader.download_failed_photo)
     if successful_images == 0:
         raise RuntimeError("没有成功下载任何图片")
+    (job_dir / "progress.json").write_text(
+        json.dumps(
+            {
+                "download_complete": True,
+                "downloaded_pages": successful_images,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
 
     started = time.monotonic()
     final_path, output_format, pdf_quality, fallback_reason = create_archive(

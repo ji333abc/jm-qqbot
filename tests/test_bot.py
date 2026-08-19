@@ -17,7 +17,14 @@ except ImportError:
     sys.modules["botpy"] = botpy_module
     sys.modules["botpy.message"] = message_module
 
-from jm_qqbot.bot import Settings, _estimate_seconds, parse_album_ids
+from jm_qqbot.bot import (
+    Settings,
+    _estimate_seconds,
+    _progress_bar,
+    _progress_percent,
+    is_progress_command,
+    parse_album_ids,
+)
 
 
 class CommandTests(unittest.TestCase):
@@ -28,6 +35,24 @@ class CommandTests(unittest.TestCase):
     def test_rejects_malformed_input(self) -> None:
         self.assertEqual(parse_album_ids("JM 123,456"), [])
         self.assertEqual(parse_album_ids("播放 123"), [])
+
+    def test_progress_commands(self) -> None:
+        self.assertTrue(is_progress_command("JM进度"))
+        self.assertTrue(is_progress_command("查询 当前 下载 进度"))
+        self.assertFalse(is_progress_command("JM 123"))
+
+
+class ProgressTests(unittest.TestCase):
+    def test_download_pages_use_ninety_nine_percent(self) -> None:
+        self.assertEqual(_progress_percent(50, 100, "downloading"), 49)
+        self.assertEqual(_progress_percent(100, 100, "downloading"), 99)
+        self.assertEqual(_progress_percent(1, None, "downloading"), None)
+
+    def test_packaging_and_upload_stay_at_ninety_nine_percent(self) -> None:
+        self.assertEqual(_progress_percent(80, 100, "packaging"), 99)
+        self.assertEqual(_progress_percent(80, 100, "uploading"), 99)
+        self.assertEqual(_progress_percent(100, 100, "completed"), 100)
+        self.assertEqual(_progress_bar(99), "███████████████████░")
 
 
 class EstimateTests(unittest.TestCase):

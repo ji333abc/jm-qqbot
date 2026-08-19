@@ -25,7 +25,25 @@ logger = logging.getLogger("JMQQBot")
 _seen_messages: dict[str, float] = {}
 _seen_lock = Lock()
 _job_lock = Lock()
+_progress_lock = Lock()
 _tasks: set[asyncio.Task] = set()
+_PROGRESS_COMMANDS = {"jm进度", "jm状态", "查询当前下载进度", "查询下载进度", "下载进度"}
+_IMAGE_SUFFIXES = {".webp", ".jpg", ".jpeg", ".png", ".bmp"}
+
+
+@dataclass(slots=True)
+class JobProgress:
+    album_id: str
+    total_pages: int | None
+    job_dir: Path
+    group_openid: str
+    batch_index: int = 1
+    batch_total: int = 1
+    downloaded_pages: int = 0
+    phase: str = "downloading"
+
+
+_active_progress: JobProgress | None = None
 
 
 def _csv_set(name: str) -> set[str]:
@@ -81,6 +99,65 @@ def parse_album_ids(command: str) -> list[str]:
         str(command or "").strip(),
     )
     return list(dict.fromkeys(re.findall(r"\d{1,12}", match.group(1)))) if match else []
+
+
+def is_progress_command(command: str) -> bool:
+    return re.sub(r"\s+", "", str(command or "")).lower() in _PROGRESS_COMMANDS
+
+
+def _progress_percent(downloaded_pages: int, total_pages: int | None, phase: str) -> int | None:
+    if phase == "completed":
+        return 100
+    if phase in {"uploading", "packaging"}:
+        return 99
+    if not total_pages or total_pages <= 0:
+        return None
+    return min(99, max(0, downloaded_pages) * 99 // total_pages)
+
+
+def _progress_bar(percent: int | None, width: int = 20) -> str:
+    if percent is None:
+        return "░" * width
+    filled = min(width, max(0, percent) * width // 100)
+    return "█" * filled + "░" * (width - filled)
+
+
+def _count_downloaded_pages(job_dir: Path) -> int:
+    image_dir = job_dir / "images"
+    try:
+        return sum(
+            1
+            for item in image_dir.rglob("*")
+            if item.is_file() and item.suffix.lower() in _IMAGE_SUFFIXES
+        )
+    except OSError:
+        return 0
+
+
+def _read_worker_progress(job_dir: Path) -> dict:
+    try:
+        data = json.loads((job_dir / "progress.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _set_active_progress(progress: JobProgress | None) -> None:
+    global _active_progress
+    with _progress_lock:
+        _active_progress = progress
+
+
+def _get_active_progress() -> JobProgress | None:
+    with _progress_lock:
+        return _active_progress
+
+
+def _clear_active_progress(progress: JobProgress) -> None:
+    global _active_progress
+    with _progress_lock:
+        if _active_progress is progress:
+            _active_progress = None
 
 
 def _is_duplicate(message_id: str) -> bool:
@@ -267,6 +344,56 @@ class JMClient(botpy.Client):
             payload.pop("msg_seq")
             await message._api.post_group_message(**payload)
 
+    async def reply_progress(self, message: GroupMessage) -> None:
+        progress = _get_active_progress()
+        if progress is None:
+            if _job_lock.locked():
+                await self.reply(message, "JM 任务正在准备，尚未开始下载")
+            else:
+                await self.reply(message, "当前没有正在运行的 JM 下载任务")
+            return
+        if progress.group_openid != str(message.group_openid):
+            await self.reply(message, "当前群没有正在运行的 JM 下载任务")
+            return
+
+        counted_pages, worker_progress = await asyncio.gather(
+            asyncio.to_thread(_count_downloaded_pages, progress.job_dir),
+            asyncio.to_thread(_read_worker_progress, progress.job_dir),
+        )
+        downloaded_pages = max(
+            counted_pages,
+            progress.downloaded_pages,
+            int(worker_progress.get("downloaded_pages") or 0),
+        )
+        archive_ready = (progress.job_dir / "archives" / f"JM{progress.album_id}.zip").is_file()
+        phase = progress.phase
+        if phase == "downloading" and worker_progress.get("download_complete") is True:
+            phase = "packaging"
+        if phase == "downloading" and progress.total_pages and downloaded_pages >= progress.total_pages:
+            phase = "packaging"
+        if archive_ready and phase == "downloading":
+            phase = "packaging"
+        percent = _progress_percent(downloaded_pages, progress.total_pages, phase)
+        display_downloaded = progress.total_pages if percent == 99 and progress.total_pages else downloaded_pages
+        percent_text = f"{percent}%" if percent is not None else "--%"
+        phase_text = {
+            "downloading": "正在下载",
+            "packaging": "正在生成 PDF 并打包",
+            "uploading": "下载与打包完成，正在上传",
+            "completed": "文件已发送",
+        }[phase]
+        batch_text = (
+            f" [{progress.batch_index}/{progress.batch_total}]" if progress.batch_total > 1 else ""
+        )
+        if progress.total_pages:
+            pages_text = f"页数：{min(display_downloaded, progress.total_pages)}/{progress.total_pages}"
+        else:
+            pages_text = f"已下载：{display_downloaded} 页（总页数未知）"
+        await self.reply(
+            message,
+            f"JM{progress.album_id}{batch_text}\n[{_progress_bar(percent)}] {percent_text}\n{pages_text}\n状态：{phase_text}",
+        )
+
     async def run_job(
         self,
         message: GroupMessage,
@@ -275,6 +402,8 @@ class JMClient(botpy.Client):
         *,
         send_result: bool = True,
         release_lock: bool = True,
+        batch_index: int = 1,
+        batch_total: int = 1,
     ) -> dict:
         settings = self.settings
         job_dir = settings.temp_root / f"jm-{album_id}-{secrets.token_hex(8)}"
@@ -283,11 +412,22 @@ class JMClient(botpy.Client):
         keep_for_debug = False
         archive_created = False
         started = time.monotonic()
+        progress = JobProgress(
+            album_id=album_id,
+            total_pages=page_count,
+            job_dir=job_dir,
+            group_openid=str(message.group_openid),
+            batch_index=batch_index,
+            batch_total=batch_total,
+        )
+        _set_active_progress(progress)
         try:
             archive, metadata = await asyncio.to_thread(
                 _run_download, settings, album_id, password, job_dir
             )
             archive_created = True
+            progress.downloaded_pages = int(metadata.get("successful_images") or 0)
+            progress.phase = "uploading"
             archive_size = archive.stat().st_size
             if archive_size > settings.max_bytes:
                 raise RuntimeError(
@@ -295,6 +435,7 @@ class JMClient(botpy.Client):
                 )
             upload_started = time.monotonic()
             await _upload(settings, archive, str(message.group_openid), str(message.id), archive.name)
+            progress.phase = "completed"
             upload_seconds = time.monotonic() - upload_started
             total_seconds = time.monotonic() - started
             timing_pages = page_count or int(metadata.get("page_count") or 0)
@@ -353,6 +494,7 @@ class JMClient(botpy.Client):
             else:
                 error_text = str(exc).replace("\n", " ")[-500:]
         finally:
+            _clear_active_progress(progress)
             if keep_for_debug:
                 task = asyncio.create_task(_cleanup_later(job_dir, settings.failure_retain))
                 _tasks.add(task)
@@ -370,7 +512,13 @@ class JMClient(botpy.Client):
         try:
             for index, (album_id, page_count) in enumerate(jobs, start=1):
                 result = await self.run_job(
-                    message, album_id, page_count, send_result=False, release_lock=False
+                    message,
+                    album_id,
+                    page_count,
+                    send_result=False,
+                    release_lock=False,
+                    batch_index=index,
+                    batch_total=len(jobs),
                 )
                 if result["ok"]:
                     lines = [
@@ -440,13 +588,16 @@ class JMClient(botpy.Client):
         if not command or _is_duplicate(message_id):
             return
         album_ids = parse_album_ids(command)
-        if album_ids:
+        if is_progress_command(command):
+            await self.reply_progress(message)
+        elif album_ids:
             await self.start_jobs(message, album_ids, requester_id)
         elif command.lower() in {"jm", "jm帮助", "jm help"}:
             await self.reply(
                 message,
                 "用法：@机器人 JM 作品ID [作品ID ...]"
-                f"\n一次最多 {self.settings.batch_max_items} 个，例如：JM 111111 222222",
+                f"\n一次最多 {self.settings.batch_max_items} 个，例如：JM 111111 222222"
+                "\n查询进度：@机器人 JM进度",
             )
 
 
